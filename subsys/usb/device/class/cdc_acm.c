@@ -111,6 +111,7 @@ struct cdc_acm_dev_data_t {
 	uint8_t rx_buf[CDC_ACM_BUFFER_SIZE];	/* Internal RX buffer */
 	struct ring_buf *rx_ringbuf;
 	struct ring_buf *tx_ringbuf;
+	uint8_t tx_bounce[CONFIG_USB_CDC_ACM_RINGBUF_SIZE];
 	/* Interface data buffer */
 	/* CDC ACM line coding properties. LE order */
 	struct cdc_acm_line_coding line_coding;
@@ -265,10 +266,16 @@ static void tx_work_handler(struct k_work *work)
 
 	LOG_DBG("Got %zd bytes from ringbuffer send to ep %x", len, ep);
 
-	usb_transfer(ep, data, len, USB_TRANS_WRITE,
-		     cdc_acm_write_cb, dev_data);
-
+	/*
+	 * usb_transfer is zero-copy; nRF EasyDMA reads the pointer directly.
+	 * The old early ring release lets the producer overwrite in-flight bytes
+	 * after wrap, and the host receives spliced bytes.
+	 */
+	memcpy(dev_data->tx_bounce, data, len);
 	ring_buf_get_finish(dev_data->tx_ringbuf, len);
+
+	usb_transfer(ep, dev_data->tx_bounce, len, USB_TRANS_WRITE,
+		     cdc_acm_write_cb, dev_data);
 }
 
 static void cdc_acm_read_cb(uint8_t ep, int size, void *priv)
