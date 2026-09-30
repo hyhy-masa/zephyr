@@ -18,6 +18,38 @@
 #include <ksched.h>
 #include <zephyr/sys/printk.h>
 
+#ifdef CONFIG_MK2_SYSWQ6
+#include <zephyr/kernel/mk2_syswq6.h>
+
+struct z_mk2_wq_slot z_mk2_wq_slots[Z_MK2_WQ_SLOTS];
+volatile uint32_t z_mk2_wq_slot_overflow;
+
+/* Claim a slot for this queue. Runs once per work queue thread, before its
+ * first work item, so the slot is fully written before a reader can see q.
+ */
+static struct z_mk2_wq_slot *z_mk2_wq_slot_claim(struct k_work_q *queue)
+{
+	struct z_mk2_wq_slot *slot = NULL;
+	unsigned int key = irq_lock();
+
+	for (int i = 0; i < Z_MK2_WQ_SLOTS; i++) {
+		if (z_mk2_wq_slots[i].q == NULL || z_mk2_wq_slots[i].q == queue) {
+			slot = &z_mk2_wq_slots[i];
+			slot->handler = NULL;
+			slot->work = NULL;
+			slot->start_ms = 0;
+			slot->q = queue;
+			break;
+		}
+	}
+	if (slot == NULL) {
+		z_mk2_wq_slot_overflow++;
+	}
+	irq_unlock(key);
+	return slot;
+}
+#endif /* CONFIG_MK2_SYSWQ6 */
+
 static inline void flag_clear(uint32_t *flagp,
 			      uint32_t bit)
 {
@@ -604,6 +636,10 @@ static void work_queue_main(void *workq_ptr, void *p2, void *p3)
 
 	struct k_work_q *queue = (struct k_work_q *)workq_ptr;
 
+#ifdef CONFIG_MK2_SYSWQ6
+	struct z_mk2_wq_slot *mk2_slot = z_mk2_wq_slot_claim(queue);
+#endif
+
 	while (true) {
 		sys_snode_t *node;
 		struct k_work *work = NULL;
@@ -669,7 +705,19 @@ static void work_queue_main(void *workq_ptr, void *p2, void *p3)
 		k_spin_unlock(&lock, key);
 
 		__ASSERT_NO_MSG(handler != NULL);
+#ifdef CONFIG_MK2_SYSWQ6
+		if (mk2_slot != NULL) {
+			mk2_slot->start_ms = k_uptime_get_32();
+			mk2_slot->work = work;
+			mk2_slot->handler = (void *)handler;
+		}
+#endif
 		handler(work);
+#ifdef CONFIG_MK2_SYSWQ6
+		if (mk2_slot != NULL) {
+			mk2_slot->handler = NULL;
+		}
+#endif
 
 		/* Mark the work item as no longer running and deal
 		 * with any cancellation issued while it was running.

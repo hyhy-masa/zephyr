@@ -672,6 +672,16 @@ config SYSTEM_WORKQUEUE_NO_YIELD
 	  cooperative and a sequence of work items is expected to complete
 	  without yielding.
 
+config MK2_SYSWQ6
+	bool "minimal-keys diag6: publish the work item each queue is running"
+	help
+	  Diagnostic build only. Every work queue thread records which work item
+	  and handler it is currently executing, and since when, in a small
+	  global table (z_mk2_wq_slots). A sampler outside the kernel reads the
+	  table from a timer ISR to name whoever holds a queue for too long.
+	  Costs three stores before and one after each handler. Never enable in
+	  shipping firmware.
+
 endmenu
 
 menu "Barrier Operations"
